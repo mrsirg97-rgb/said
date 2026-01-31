@@ -1,16 +1,46 @@
 use anchor_lang::prelude::*;
+use anchor_lang::system_program;
 
 declare_id!("SAiD111111111111111111111111111111111111111");
+
+// Protocol fees (in lamports)
+pub const REGISTRATION_FEE: u64 = 5_000_000; // 0.005 SOL
+pub const VALIDATION_FEE: u64 = 1_000_000;   // 0.001 SOL
 
 #[program]
 pub mod said {
     use super::*;
 
-    /// Register a new AI agent identity
+    /// Initialize the protocol treasury
+    pub fn initialize_treasury(ctx: Context<InitializeTreasury>) -> Result<()> {
+        let treasury = &mut ctx.accounts.treasury;
+        treasury.authority = ctx.accounts.authority.key();
+        treasury.total_collected = 0;
+        treasury.bump = ctx.bumps.treasury;
+        Ok(())
+    }
+
+    /// Register a new AI agent identity (pays protocol fee)
     pub fn register_agent(
         ctx: Context<RegisterAgent>,
         metadata_uri: String,
     ) -> Result<()> {
+        // Transfer registration fee to treasury
+        system_program::transfer(
+            CpiContext::new(
+                ctx.accounts.system_program.to_account_info(),
+                system_program::Transfer {
+                    from: ctx.accounts.owner.to_account_info(),
+                    to: ctx.accounts.treasury.to_account_info(),
+                },
+            ),
+            REGISTRATION_FEE,
+        )?;
+        
+        // Update treasury stats
+        let treasury = &mut ctx.accounts.treasury;
+        treasury.total_collected += REGISTRATION_FEE;
+
         let agent = &mut ctx.accounts.agent_identity;
         agent.owner = ctx.accounts.owner.key();
         agent.metadata_uri = metadata_uri;
@@ -21,6 +51,32 @@ pub mod said {
             agent_id: agent.key(),
             owner: agent.owner,
             metadata_uri: agent.metadata_uri.clone(),
+            fee_paid: REGISTRATION_FEE,
+        });
+        
+        Ok(())
+    }
+
+    /// Withdraw fees from treasury (authority only)
+    pub fn withdraw_fees(ctx: Context<WithdrawFees>, amount: u64) -> Result<()> {
+        let treasury = &ctx.accounts.treasury;
+        let treasury_lamports = treasury.to_account_info().lamports();
+        
+        // Keep minimum rent in treasury
+        let rent = Rent::get()?;
+        let min_balance = rent.minimum_balance(8 + Treasury::INIT_SPACE);
+        
+        require!(
+            treasury_lamports.saturating_sub(amount) >= min_balance,
+            SaidError::InsufficientTreasuryBalance
+        );
+        
+        **ctx.accounts.treasury.to_account_info().try_borrow_mut_lamports()? -= amount;
+        **ctx.accounts.authority.to_account_info().try_borrow_mut_lamports()? += amount;
+        
+        emit!(FeesWithdrawn {
+            authority: ctx.accounts.authority.key(),
+            amount,
         });
         
         Ok(())
@@ -110,6 +166,44 @@ pub mod said {
 // ============ ACCOUNTS ============
 
 #[derive(Accounts)]
+#[error_code]
+pub enum SaidError {
+    #[msg("Insufficient treasury balance for withdrawal")]
+    InsufficientTreasuryBalance,
+}
+
+#[derive(Accounts)]
+pub struct WithdrawFees<'info> {
+    #[account(
+        mut,
+        seeds = [b"treasury"],
+        bump = treasury.bump,
+        has_one = authority
+    )]
+    pub treasury: Account<'info, Treasury>,
+    
+    #[account(mut)]
+    pub authority: Signer<'info>,
+}
+
+#[derive(Accounts)]
+pub struct InitializeTreasury<'info> {
+    #[account(
+        init,
+        payer = authority,
+        space = 8 + Treasury::INIT_SPACE,
+        seeds = [b"treasury"],
+        bump
+    )]
+    pub treasury: Account<'info, Treasury>,
+    
+    #[account(mut)]
+    pub authority: Signer<'info>,
+    
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
 #[instruction(metadata_uri: String)]
 pub struct RegisterAgent<'info> {
     #[account(
@@ -120,6 +214,13 @@ pub struct RegisterAgent<'info> {
         bump
     )]
     pub agent_identity: Account<'info, AgentIdentity>,
+    
+    #[account(
+        mut,
+        seeds = [b"treasury"],
+        bump = treasury.bump
+    )]
+    pub treasury: Account<'info, Treasury>,
     
     #[account(mut)]
     pub owner: Signer<'info>,
@@ -191,6 +292,14 @@ pub struct ValidateWork<'info> {
 
 #[account]
 #[derive(InitSpace)]
+pub struct Treasury {
+    pub authority: Pubkey,
+    pub total_collected: u64,
+    pub bump: u8,
+}
+
+#[account]
+#[derive(InitSpace)]
 pub struct AgentIdentity {
     pub owner: Pubkey,
     #[max_len(200)]
@@ -231,6 +340,7 @@ pub struct AgentRegistered {
     pub agent_id: Pubkey,
     pub owner: Pubkey,
     pub metadata_uri: String,
+    pub fee_paid: u64,
 }
 
 #[event]
@@ -255,4 +365,10 @@ pub struct WorkValidated {
     pub task_hash: [u8; 32],
     pub passed: bool,
     pub evidence_uri: String,
+}
+
+#[event]
+pub struct FeesWithdrawn {
+    pub authority: Pubkey,
+    pub amount: u64,
 }
