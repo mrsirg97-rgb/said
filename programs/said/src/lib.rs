@@ -4,8 +4,8 @@ use anchor_lang::system_program;
 declare_id!("SAiD111111111111111111111111111111111111111");
 
 // Protocol fees (in lamports)
-pub const REGISTRATION_FEE: u64 = 5_000_000; // 0.005 SOL
-pub const VALIDATION_FEE: u64 = 1_000_000;   // 0.001 SOL
+pub const VERIFICATION_FEE: u64 = 10_000_000; // 0.01 SOL - verified badge
+pub const VALIDATION_FEE: u64 = 1_000_000;    // 0.001 SOL - work validation
 
 #[program]
 pub mod said {
@@ -20,12 +20,30 @@ pub mod said {
         Ok(())
     }
 
-    /// Register a new AI agent identity (pays protocol fee)
+    /// Register a new AI agent identity (FREE)
     pub fn register_agent(
         ctx: Context<RegisterAgent>,
         metadata_uri: String,
     ) -> Result<()> {
-        // Transfer registration fee to treasury
+        let agent = &mut ctx.accounts.agent_identity;
+        agent.owner = ctx.accounts.owner.key();
+        agent.metadata_uri = metadata_uri;
+        agent.created_at = Clock::get()?.unix_timestamp;
+        agent.is_verified = false;
+        agent.bump = ctx.bumps.agent_identity;
+        
+        emit!(AgentRegistered {
+            agent_id: agent.key(),
+            owner: agent.owner,
+            metadata_uri: agent.metadata_uri.clone(),
+        });
+        
+        Ok(())
+    }
+
+    /// Get verified badge (PAID - 0.01 SOL)
+    pub fn get_verified(ctx: Context<GetVerified>) -> Result<()> {
+        // Transfer verification fee to treasury
         system_program::transfer(
             CpiContext::new(
                 ctx.accounts.system_program.to_account_info(),
@@ -34,24 +52,19 @@ pub mod said {
                     to: ctx.accounts.treasury.to_account_info(),
                 },
             ),
-            REGISTRATION_FEE,
+            VERIFICATION_FEE,
         )?;
         
-        // Update treasury stats
         let treasury = &mut ctx.accounts.treasury;
-        treasury.total_collected += REGISTRATION_FEE;
+        treasury.total_collected += VERIFICATION_FEE;
 
         let agent = &mut ctx.accounts.agent_identity;
-        agent.owner = ctx.accounts.owner.key();
-        agent.metadata_uri = metadata_uri;
-        agent.created_at = Clock::get()?.unix_timestamp;
-        agent.bump = ctx.bumps.agent_identity;
+        agent.is_verified = true;
+        agent.verified_at = Some(Clock::get()?.unix_timestamp);
         
-        emit!(AgentRegistered {
+        emit!(AgentVerified {
             agent_id: agent.key(),
-            owner: agent.owner,
-            metadata_uri: agent.metadata_uri.clone(),
-            fee_paid: REGISTRATION_FEE,
+            fee_paid: VERIFICATION_FEE,
         });
         
         Ok(())
@@ -215,6 +228,22 @@ pub struct RegisterAgent<'info> {
     )]
     pub agent_identity: Account<'info, AgentIdentity>,
     
+    #[account(mut)]
+    pub owner: Signer<'info>,
+    
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct GetVerified<'info> {
+    #[account(
+        mut,
+        seeds = [b"agent", owner.key().as_ref()],
+        bump = agent_identity.bump,
+        has_one = owner
+    )]
+    pub agent_identity: Account<'info, AgentIdentity>,
+    
     #[account(
         mut,
         seeds = [b"treasury"],
@@ -305,6 +334,8 @@ pub struct AgentIdentity {
     #[max_len(200)]
     pub metadata_uri: String,
     pub created_at: i64,
+    pub is_verified: bool,
+    pub verified_at: Option<i64>,
     pub bump: u8,
 }
 
@@ -340,6 +371,11 @@ pub struct AgentRegistered {
     pub agent_id: Pubkey,
     pub owner: Pubkey,
     pub metadata_uri: String,
+}
+
+#[event]
+pub struct AgentVerified {
+    pub agent_id: Pubkey,
     pub fee_paid: u64,
 }
 
