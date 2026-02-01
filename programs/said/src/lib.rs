@@ -1,7 +1,7 @@
 use anchor_lang::prelude::*;
 use anchor_lang::system_program;
 
-declare_id!("SAiD111111111111111111111111111111111111111");
+declare_id!("5dpw6KEQPn248pnkkaYyWfHwu2nfb3LUMbTucb6LaA8G");
 
 // ============ HARDCODED CONSTANTS ============
 // Treasury authority - ONLY this wallet can initialize treasury and withdraw fees

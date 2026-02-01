@@ -2,6 +2,9 @@
 seeds = false
 skip-lint = false
 
+[programs.mainnet]
+said = "5dpw6KEQPn248pnkkaYyWfHwu2nfb3LUMbTucb6LaA8G"
+
 [programs.devnet]
 said = "SAiD111111111111111111111111111111111111111"
 
@@ -9,7 +12,7 @@ said = "SAiD111111111111111111111111111111111111111"
 url = "https://api.apr.dev"
 
 [provider]
-cluster = "devnet"
+cluster = "mainnet"
 wallet = "~/.config/solana/id.json"
 
 [scripts]
